@@ -348,9 +348,13 @@ def format_main_message(
         header,
         f"Данные от: {snap.timestamp}",
         "",
-        f"Место среди 1-го приоритета: {snap.rank_p1}{format_delta(delta_p1)}",
-        f"Место среди 1-го приоритета + согласие: "
-        f"{snap.rank_p1_consent}{format_delta(delta_p1c)}",
+        "Выше меня человек:",
+        f"1 приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
+        f"1 приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
+        "",
+        "Если подашь сейчас согласие:",
+        f"Место среди 1-го приоритета: {snap.rank_p1}",
+        f"Место среди 1-го приоритета + согласие: {snap.rank_p1_consent}",
     ]
     return "\n".join(lines)
 
