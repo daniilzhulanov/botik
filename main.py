@@ -160,7 +160,7 @@ STOP_LABELS = [
 STOP_PATTERN = "|".join(STOP_LABELS)
 
 TS_RE = re.compile(r"Представлены данные от\s*([\d.]{8,10}),?\s*([\d:]{4,5})")
-RECORD_RE = re.compile(r"(\d{1,4})\s*№(\d{5,8})", re.S)
+RECORD_RE = re.compile(r"(?m)^(\d{1,4})\s*№\s*(\d{5,8})\s*$")
 
 
 def _get_field(body: str, label: str) -> str:
@@ -181,22 +181,51 @@ class Record:
 
 
 def fetch_page_text() -> str:
-    resp = requests.get(RANKING_URL, headers=HEADERS, timeout=20)
+    resp = requests.get(
+        RANKING_URL,
+        headers={
+            **HEADERS,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+        timeout=30,
+    )
     resp.raise_for_status()
+
+    # Не полагаемся на кодировку, которую мог неверно определить сервер.
+    resp.encoding = resp.apparent_encoding or resp.encoding
+
     soup = BeautifulSoup(resp.text, "html.parser")
     return soup.get_text("\n", strip=True)
 
 
 def parse_ranking(text: str):
-    """Возвращает (timestamp_str, [Record, ...])."""
+    """Возвращает (timestamp_str, [Record, ...]).
+
+    Важно: сайт ИТМО периодически меняет HTML-разметку и переносы строк.
+    Поэтому запись ищется как отдельная строка вида:
+        123 №1713502
+    а не как жёсткая последовательность HTML-узлов.
+    """
     ts_match = TS_RE.search(text)
-    timestamp = f"{ts_match.group(1)}, {ts_match.group(2)}" if ts_match else "неизвестно"
+    timestamp = (
+        f"{ts_match.group(1)}, {ts_match.group(2)}"
+        if ts_match
+        else "неизвестно"
+    )
+
+    # Нормализуем неразрывные пробелы и Unicode-разделители.
+    text = text.replace("\xa0", " ")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     matches = list(RECORD_RE.finditer(text))
     records = []
+
     for i, m in enumerate(matches):
         position = int(m.group(1))
         number = int(m.group(2))
+
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         body = text[start:end]
@@ -214,6 +243,7 @@ def parse_ranking(text: str):
                 consent=consent_raw.strip().lower() == "да",
             )
         )
+
     return timestamp, records
 
 
@@ -259,10 +289,21 @@ class Snapshot:
 def compute_snapshot() -> Snapshot:
     text = fetch_page_text()
     timestamp, records = parse_ranking(text)
+
+    # Диагностика защищает от ситуации, когда сайт изменил разметку
+    # и парсер вообще перестал видеть записи.
+    if not records:
+        raise TargetNotFound(
+            "Не удалось разобрать записи конкурсного списка. "
+            "Сайт изменил разметку страницы."
+        )
+
     target = next((r for r in records if r.number == TARGET_NUMBER), None)
     if target is None:
         raise TargetNotFound(
-            f"Номер {TARGET_NUMBER} не найден в списке на странице {RANKING_URL}"
+            f"Номер {TARGET_NUMBER} отсутствует в текущей выдаче страницы "
+            f"(распознано записей: {len(records)}, данные от: {timestamp}). "
+            f"URL: {RANKING_URL}"
         )
 
     rank_p1 = rank_among(records, lambda r: r.priority == 1, target.position)
