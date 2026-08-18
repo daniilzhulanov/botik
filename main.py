@@ -346,13 +346,13 @@ def format_main_message(
     header = "📍 Текущее положение" if is_manual else "📊 Обновление данных на сайте"
     lines = [
         header,
-        f"Данные от: {snap.timestamp}",
+        f"🕒 Данные от: {snap.timestamp}",
         "",
-        "Выше меня человек:",
-        f"1 приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
-        f"1 приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
+        "👤 Выше меня человек:",
+        f"1️⃣ приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
+        f"1️⃣ приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
         "",
-        "Если подашь сейчас согласие:",
+        "✅ Если подашь сейчас согласие:",
         f"Место среди 1-го приоритета: {snap.rank_p1}",
         f"Место среди 1-го приоритета + согласие: {snap.rank_p1_consent}",
     ]
@@ -366,13 +366,13 @@ def format_details_message(snap: Snapshot) -> str:
 
     lines = [
         "📋 Подробнее",
-        f"Данные от: {snap.timestamp}",
+        f"🕒 Данные от: {snap.timestamp}",
         "",
-        "Сколько человек с баллом выше вас (по видам испытаний):",
+        "🏆 Сколько человек с баллом выше вас (по видам испытаний):",
         "",
-        fmt_group("Приоритет 1:", snap.breakdown["priority_1"]),
+        fmt_group("1️⃣ Приоритет 1:", snap.breakdown["priority_1"]),
         "",
-        fmt_group("Приоритет 2:", snap.breakdown["priority_2"]),
+        fmt_group("2️⃣ Приоритет 2:", snap.breakdown["priority_2"]),
     ]
     return "\n".join(lines)
 
@@ -380,14 +380,14 @@ def format_details_message(snap: Snapshot) -> str:
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Подробнее", callback_data="details")],
-            [InlineKeyboardButton("Текущее положение", callback_data="current")],
+            [InlineKeyboardButton("🔍 Подробнее", callback_data="details")],
+            [InlineKeyboardButton("🔄 Текущее положение", callback_data="current")],
         ]
     )
 
 
 def details_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Назад", callback_data="back")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="back")]])
 
 
 # ---------------------------------------------------------------------------
