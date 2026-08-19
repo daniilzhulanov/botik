@@ -68,10 +68,19 @@ def db_connect():
             timestamp TEXT,
             rank_p1 INTEGER,
             rank_p1_consent INTEGER,
-            breakdown_json TEXT
+            breakdown_json TEXT,
+            position INTEGER,
+            high_priority INTEGER,
+            top_passing_priority INTEGER,
+            consent INTEGER
         )
         """
     )
+    # Миграция для баз, созданных до появления этих колонок.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)")}
+    for col in ("position", "high_priority", "top_passing_priority", "consent"):
+        if col not in existing_cols:
+            conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} INTEGER")
     conn.commit()
     return conn
 
@@ -90,21 +99,47 @@ def meta_set(conn, key, value):
     conn.commit()
 
 
-def save_snapshot(conn, message_id, timestamp, rank_p1, rank_p1_consent, breakdown):
+def save_snapshot(
+    conn,
+    message_id,
+    timestamp,
+    rank_p1,
+    rank_p1_consent,
+    breakdown,
+    position,
+    high_priority,
+    top_passing_priority,
+    consent,
+):
     conn.execute(
         "INSERT INTO snapshots(message_id, timestamp, rank_p1, rank_p1_consent, "
-        "breakdown_json) VALUES (?, ?, ?, ?, ?) "
+        "breakdown_json, position, high_priority, top_passing_priority, consent) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(message_id) DO UPDATE SET timestamp=excluded.timestamp, "
         "rank_p1=excluded.rank_p1, rank_p1_consent=excluded.rank_p1_consent, "
-        "breakdown_json=excluded.breakdown_json",
-        (message_id, timestamp, rank_p1, rank_p1_consent, json.dumps(breakdown)),
+        "breakdown_json=excluded.breakdown_json, position=excluded.position, "
+        "high_priority=excluded.high_priority, "
+        "top_passing_priority=excluded.top_passing_priority, "
+        "consent=excluded.consent",
+        (
+            message_id,
+            timestamp,
+            rank_p1,
+            rank_p1_consent,
+            json.dumps(breakdown),
+            position,
+            int(high_priority),
+            int(top_passing_priority),
+            int(consent),
+        ),
     )
     conn.commit()
 
 
 def load_snapshot(conn, message_id):
     row = conn.execute(
-        "SELECT timestamp, rank_p1, rank_p1_consent, breakdown_json "
+        "SELECT timestamp, rank_p1, rank_p1_consent, breakdown_json, "
+        "position, high_priority, top_passing_priority, consent "
         "FROM snapshots WHERE message_id=?",
         (message_id,),
     ).fetchone()
@@ -115,6 +150,10 @@ def load_snapshot(conn, message_id):
         "rank_p1": row[1],
         "rank_p1_consent": row[2],
         "breakdown": json.loads(row[3]),
+        "position": row[4],
+        "high_priority": bool(row[5]),
+        "top_passing_priority": bool(row[6]),
+        "consent": bool(row[7]),
     }
 
 
@@ -154,6 +193,8 @@ class Record:
     priority: Optional[int]
     exam_type: str
     consent: bool
+    high_priority: bool
+    top_passing_priority: bool
 
 
 def fetch_page_text() -> str:
@@ -209,6 +250,8 @@ def parse_ranking(text: str):
         priority_raw = _get_field(body, "Приоритет")
         exam_type = _get_field(body, "Вид испытания")
         consent_raw = _get_field(body, "Есть согласие")
+        high_priority_raw = _get_field(body, "Основной высший приоритет")
+        top_passing_priority_raw = _get_field(body, "Высший проходной приоритет")
 
         records.append(
             Record(
@@ -217,6 +260,8 @@ def parse_ranking(text: str):
                 priority=int(priority_raw) if priority_raw.isdigit() else None,
                 exam_type=exam_type,
                 consent=consent_raw.strip().lower() == "да",
+                high_priority=high_priority_raw.strip().lower() == "да",
+                top_passing_priority=top_passing_priority_raw.strip().lower() == "да",
             )
         )
 
@@ -257,6 +302,8 @@ class Snapshot:
     position: int
     priority: Optional[int]
     consent: bool
+    high_priority: bool
+    top_passing_priority: bool
     rank_p1: int
     rank_p1_consent: int
     breakdown: dict
@@ -282,9 +329,9 @@ def compute_snapshot() -> Snapshot:
             f"URL: {RANKING_URL}"
         )
 
-    rank_p1 = rank_among(records, lambda r: r.priority == 1, target.position)
+    rank_p1 = rank_among(records, lambda r: r.high_priority, target.position)
     rank_p1_consent = rank_among(
-        records, lambda r: r.priority == 1 and r.consent, target.position
+        records, lambda r: r.high_priority and r.consent, target.position
     )
     breakdown = {
         "priority_1": breakdown_for_priority(records, 1, target.position),
@@ -295,6 +342,8 @@ def compute_snapshot() -> Snapshot:
         position=target.position,
         priority=target.priority,
         consent=target.consent,
+        high_priority=target.high_priority,
+        top_passing_priority=target.top_passing_priority,
         rank_p1=rank_p1,
         rank_p1_consent=rank_p1_consent,
         breakdown=breakdown,
@@ -323,14 +372,15 @@ def format_main_message(
     lines = [
         header,
         f"🕒 Данные от: {snap.timestamp}",
+        f"🔢 Мой номер: {snap.position}",
         "",
         "👤 Выше меня человек:",
-        f"1-й приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
-        f"1-й приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
+        f"Основной высший приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
+        f"Основной высший приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
         "",
         "✅ Если подашь сейчас согласие:",
-        f"Место среди 1-го приоритета: {snap.rank_p1}",
-        f"Место среди 1-го приоритета + согласие: {snap.rank_p1_consent}",
+        f"Место среди основного высшего приоритета: {snap.rank_p1}",
+        f"Место среди основного высшего приоритета + согласие: {snap.rank_p1_consent}",
     ]
     return "\n".join(lines)
 
@@ -353,10 +403,27 @@ def format_details_message(snap: Snapshot) -> str:
     return "\n".join(lines)
 
 
+def format_about_message(snap: Snapshot) -> str:
+    def yn(value: bool) -> str:
+        return "да" if value else "нет"
+
+    lines = [
+        "🧑 Обо мне",
+        f"🕒 Данные от: {snap.timestamp}",
+        "",
+        f"🔢 Мой номер: {snap.position}",
+        f"Основной высший приоритет: {yn(snap.high_priority)}",
+        f"Высший проходной приоритет: {yn(snap.top_passing_priority)}",
+        f"Есть согласие: {yn(snap.consent)}",
+    ]
+    return "\n".join(lines)
+
+
 def main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("🔍 Подробнее", callback_data="details")],
+            [InlineKeyboardButton("🧑 Обо мне", callback_data="about")],
             [InlineKeyboardButton("🔄 Текущее положение", callback_data="current")],
         ]
     )
@@ -381,7 +448,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Бот следит за вашей позицией в конкурсном списке ИТМО.\n"
         "Буду присылать сообщение при каждом обновлении данных на сайте.\n"
-        "Команда /now — посчитать текущее положение прямо сейчас."
+        "Команда /now – посчитать текущее положение прямо сейчас."
     )
 
 
@@ -410,35 +477,35 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Данные устарели, нажмите «Текущее положение».", show_alert=True)
         return
 
+    def snapshot_from_saved() -> Snapshot:
+        # breakdown/позиция/приоритеты хранятся в снимке как есть – превращаем
+        # обратно в Snapshot-подобную структуру
+        return Snapshot(
+            timestamp=snap_data["timestamp"],
+            position=snap_data["position"],
+            priority=None,
+            consent=snap_data["consent"],
+            high_priority=snap_data["high_priority"],
+            top_passing_priority=snap_data["top_passing_priority"],
+            rank_p1=snap_data["rank_p1"],
+            rank_p1_consent=snap_data["rank_p1_consent"],
+            breakdown=snap_data["breakdown"],
+        )
+
     if query.data == "details":
         await query.answer()
-        # breakdown хранится в снимке как есть — превращаем обратно в Snapshot-подобную структуру
-        text = format_details_message(
-            Snapshot(
-                timestamp=snap_data["timestamp"],
-                position=0,
-                priority=None,
-                consent=False,
-                rank_p1=snap_data["rank_p1"],
-                rank_p1_consent=snap_data["rank_p1_consent"],
-                breakdown=snap_data["breakdown"],
-            )
-        )
+        text = format_details_message(snapshot_from_saved())
+        await query.edit_message_text(text, reply_markup=details_keyboard())
+
+    elif query.data == "about":
+        await query.answer()
+        text = format_about_message(snapshot_from_saved())
         await query.edit_message_text(text, reply_markup=details_keyboard())
 
     elif query.data == "back":
         await query.answer()
         # Пересобираем главный экран без пересчёта дельт (это тот же снимок)
-        snap = Snapshot(
-            timestamp=snap_data["timestamp"],
-            position=0,
-            priority=None,
-            consent=False,
-            rank_p1=snap_data["rank_p1"],
-            rank_p1_consent=snap_data["rank_p1_consent"],
-            breakdown=snap_data["breakdown"],
-        )
-        text = format_main_message(snap, None, None, is_manual=False)
+        text = format_main_message(snapshot_from_saved(), None, None, is_manual=False)
         await query.edit_message_text(text, reply_markup=main_keyboard())
     else:
         await query.answer()
@@ -468,7 +535,16 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     text = format_main_message(snap, delta_p1, delta_p1c, is_manual=True)
     msg = await context.bot.send_message(chat_id, text, reply_markup=main_keyboard())
     save_snapshot(
-        conn, msg.message_id, snap.timestamp, snap.rank_p1, snap.rank_p1_consent, snap.breakdown
+        conn,
+        msg.message_id,
+        snap.timestamp,
+        snap.rank_p1,
+        snap.rank_p1_consent,
+        snap.breakdown,
+        snap.position,
+        snap.high_priority,
+        snap.top_passing_priority,
+        snap.consent,
     )
     # Обратите внимание: "ручная" проверка не перезаписывает last_timestamp /
     # last_rank_*, чтобы не сбивать отсчёт дельты у автоматических обновлений.
@@ -497,7 +573,16 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     text = format_main_message(snap, delta_p1, delta_p1c, is_manual=False)
     msg = await context.bot.send_message(CHAT_ID, text, reply_markup=main_keyboard())
     save_snapshot(
-        conn, msg.message_id, snap.timestamp, snap.rank_p1, snap.rank_p1_consent, snap.breakdown
+        conn,
+        msg.message_id,
+        snap.timestamp,
+        snap.rank_p1,
+        snap.rank_p1_consent,
+        snap.breakdown,
+        snap.position,
+        snap.high_priority,
+        snap.top_passing_priority,
+        snap.consent,
     )
 
     meta_set(conn, "last_timestamp", snap.timestamp)
