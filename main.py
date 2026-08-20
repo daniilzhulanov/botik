@@ -375,14 +375,10 @@ def compute_snapshot() -> Snapshot:
         lambda r: (not r.high_priority) and r.top_passing_priority and r.consent,
         target.position,
     )
-    # Основной высший приоритет: да + Высший проходной приоритет: да + Есть согласие: да
-    rank_hp_top_consent = count_ahead(
-        records,
-        lambda r: r.high_priority and r.top_passing_priority and r.consent,
-        target.position,
-    )
-    # Сумма: (высший приоритет да + проходной да + согласие да) + rank_special
-    rank_combined = rank_hp_top_consent + rank_special
+    # Сумма: (осн. высший приоритет: да + согласие: да) + rank_special
+    # "осн. высший приоритет" здесь считается как "осн. высший приоритет + согласие",
+    # т.е. без требования на "Высший проходной приоритет".
+    rank_combined = (rank_p1_consent - 1) + rank_special
 
     breakdown = {
         "priority_1": breakdown_for_priority(records, 1, target.position),
@@ -433,14 +429,9 @@ def format_main_message(
         f"🔢 Мой номер: {snap.position}",
         "",
         "👤 Выше меня человек:",
-        f"Приоритет 1: {snap.rank_priority1 - 1}{format_delta(delta_priority1)}",
-        f"Основной высший приоритет: {snap.rank_p1 - 1}{format_delta(delta_p1)}",
         f"Основной высший приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
         f"Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special}",
-        f"Сумма (осн. высший приоритет ИЛИ без него, но с высшим проходным) + высший проходной + согласие: {snap.rank_combined}",
-        "",
-        "✅ Если подашь сейчас согласие:",
-        f"Место среди основного высшего приоритета + согласие: {snap.rank_p1_consent}",
+        f"Сумма (осн. высший приоритет + согласие) + (без осн. высшего приоритета, но с высшим проходным + согласие): {snap.rank_combined}",
     ]
     return "\n".join(lines)
 
