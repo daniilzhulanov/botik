@@ -420,6 +420,8 @@ def format_main_message(
     delta_p1: Optional[int],
     delta_p1c: Optional[int],
     delta_priority1: Optional[int],
+    delta_special: Optional[int],
+    delta_combined: Optional[int],
     is_manual: bool,
 ) -> str:
     header = "📍 Текущее положение" if is_manual else "📊 Обновление данных на сайте"
@@ -430,8 +432,8 @@ def format_main_message(
         "",
         "👤 Выше меня человек:",
         f"Основной высший приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
-        f"Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special}",
-        f"Сумма (осн. высший приоритет + согласие) + (без осн. высшего приоритета, но с высшим проходным + согласие): {snap.rank_combined}",
+        f"Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special}{format_delta(delta_special)}",
+        f"Сумма (осн. высший приоритет + согласие) + (без осн. высшего приоритета, но с высшим проходным + согласие): {snap.rank_combined}{format_delta(delta_combined)}",
     ]
     return "\n".join(lines)
 
@@ -560,7 +562,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         # Пересобираем главный экран без пересчёта дельт (это тот же снимок)
         text = format_main_message(
-            snapshot_from_saved(), None, None, None, is_manual=False
+            snapshot_from_saved(), None, None, None, None, None, is_manual=False
         )
         await query.edit_message_text(text, reply_markup=main_keyboard())
     else:
@@ -586,6 +588,8 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     prev_p1 = meta_get(conn, "last_rank_p1")
     prev_p1c = meta_get(conn, "last_rank_p1_consent")
     prev_priority1 = meta_get(conn, "last_rank_priority1")
+    prev_special = meta_get(conn, "last_rank_special")
+    prev_combined = meta_get(conn, "last_rank_combined")
     delta_p1 = snap.rank_p1 - int(prev_p1) if prev_p1 is not None else None
     delta_p1c = (
         snap.rank_p1_consent - int(prev_p1c) if prev_p1c is not None else None
@@ -595,9 +599,16 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         if prev_priority1 is not None
         else None
     )
+    delta_special = (
+        snap.rank_special - int(prev_special) if prev_special is not None else None
+    )
+    delta_combined = (
+        snap.rank_combined - int(prev_combined) if prev_combined is not None else None
+    )
 
     text = format_main_message(
-        snap, delta_p1, delta_p1c, delta_priority1, is_manual=True
+        snap, delta_p1, delta_p1c, delta_priority1, delta_special, delta_combined,
+        is_manual=True
     )
     msg = await context.bot.send_message(chat_id, text, reply_markup=main_keyboard())
     save_snapshot(
@@ -637,6 +648,8 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     prev_p1 = meta_get(conn, "last_rank_p1")
     prev_p1c = meta_get(conn, "last_rank_p1_consent")
     prev_priority1 = meta_get(conn, "last_rank_priority1")
+    prev_special = meta_get(conn, "last_rank_special")
+    prev_combined = meta_get(conn, "last_rank_combined")
     delta_p1 = snap.rank_p1 - int(prev_p1) if prev_p1 is not None else None
     delta_p1c = (
         snap.rank_p1_consent - int(prev_p1c) if prev_p1c is not None else None
@@ -646,9 +659,16 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
         if prev_priority1 is not None
         else None
     )
+    delta_special = (
+        snap.rank_special - int(prev_special) if prev_special is not None else None
+    )
+    delta_combined = (
+        snap.rank_combined - int(prev_combined) if prev_combined is not None else None
+    )
 
     text = format_main_message(
-        snap, delta_p1, delta_p1c, delta_priority1, is_manual=False
+        snap, delta_p1, delta_p1c, delta_priority1, delta_special, delta_combined,
+        is_manual=False
     )
     msg = await context.bot.send_message(CHAT_ID, text, reply_markup=main_keyboard())
     save_snapshot(
@@ -671,11 +691,14 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     meta_set(conn, "last_rank_p1", snap.rank_p1)
     meta_set(conn, "last_rank_p1_consent", snap.rank_p1_consent)
     meta_set(conn, "last_rank_priority1", snap.rank_priority1)
+    meta_set(conn, "last_rank_special", snap.rank_special)
+    meta_set(conn, "last_rank_combined", snap.rank_combined)
     log.info(
         "Отправлено обновление: rank_p1=%s (%s), rank_p1_consent=%s (%s), "
-        "rank_priority1=%s (%s)",
+        "rank_priority1=%s (%s), rank_special=%s (%s), rank_combined=%s (%s)",
         snap.rank_p1, delta_p1, snap.rank_p1_consent, delta_p1c,
         snap.rank_priority1, delta_priority1,
+        snap.rank_special, delta_special, snap.rank_combined, delta_combined,
     )
 
 
