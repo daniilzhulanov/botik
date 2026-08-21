@@ -75,7 +75,8 @@ def db_connect():
             top_passing_priority INTEGER,
             consent INTEGER,
             rank_special INTEGER,
-            rank_combined INTEGER
+            rank_combined INTEGER,
+            rank_special_below INTEGER
         )
         """
     )
@@ -89,6 +90,7 @@ def db_connect():
         "rank_priority1",
         "rank_special",
         "rank_combined",
+        "rank_special_below",
     ):
         if col not in existing_cols:
             conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} INTEGER")
@@ -124,12 +126,14 @@ def save_snapshot(
     consent,
     rank_special,
     rank_combined,
+    rank_special_below,
 ):
     conn.execute(
         "INSERT INTO snapshots(message_id, timestamp, rank_p1, rank_p1_consent, "
         "rank_priority1, breakdown_json, position, high_priority, "
-        "top_passing_priority, consent, rank_special, rank_combined) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "top_passing_priority, consent, rank_special, rank_combined, "
+        "rank_special_below) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(message_id) DO UPDATE SET timestamp=excluded.timestamp, "
         "rank_p1=excluded.rank_p1, rank_p1_consent=excluded.rank_p1_consent, "
         "rank_priority1=excluded.rank_priority1, "
@@ -137,7 +141,8 @@ def save_snapshot(
         "high_priority=excluded.high_priority, "
         "top_passing_priority=excluded.top_passing_priority, "
         "consent=excluded.consent, rank_special=excluded.rank_special, "
-        "rank_combined=excluded.rank_combined",
+        "rank_combined=excluded.rank_combined, "
+        "rank_special_below=excluded.rank_special_below",
         (
             message_id,
             timestamp,
@@ -151,6 +156,7 @@ def save_snapshot(
             int(consent),
             rank_special,
             rank_combined,
+            rank_special_below,
         ),
     )
     conn.commit()
@@ -160,7 +166,7 @@ def load_snapshot(conn, message_id):
     row = conn.execute(
         "SELECT timestamp, rank_p1, rank_p1_consent, rank_priority1, breakdown_json, "
         "position, high_priority, top_passing_priority, consent, "
-        "rank_special, rank_combined "
+        "rank_special, rank_combined, rank_special_below "
         "FROM snapshots WHERE message_id=?",
         (message_id,),
     ).fetchone()
@@ -178,6 +184,7 @@ def load_snapshot(conn, message_id):
         "consent": bool(row[8]),
         "rank_special": row[9] if row[9] is not None else 0,
         "rank_combined": row[10] if row[10] is not None else 0,
+        "rank_special_below": row[11] if row[11] is not None else 0,
     }
 
 
@@ -314,6 +321,12 @@ def count_ahead(records, predicate, target_position: int) -> int:
     return sum(1 for r in records if predicate(r) and r.position < target_position)
 
 
+def count_behind(records, predicate, target_position: int) -> int:
+    """Считает количество записей, удовлетворяющих predicate, которые стоят
+    ниже (позади) заданной позиции."""
+    return sum(1 for r in records if predicate(r) and r.position > target_position)
+
+
 def breakdown_for_priority(records, priority: int, target_position: int) -> dict:
     result = {}
     for cat in BREAKDOWN_CATEGORIES:
@@ -340,6 +353,7 @@ class Snapshot:
     rank_priority1: int
     rank_special: int
     rank_combined: int
+    rank_special_below: int
     breakdown: dict
 
 
@@ -369,12 +383,15 @@ def compute_snapshot() -> Snapshot:
     )
     rank_priority1 = rank_among(records, lambda r: r.priority == 1, target.position)
 
-    # Основной высший приоритет: нет + Высший проходной приоритет: да + Есть согласие: да
-    rank_special = count_ahead(
-        records,
-        lambda r: (not r.high_priority) and r.top_passing_priority and r.consent,
-        target.position,
+    special_predicate = (
+        lambda r: (not r.high_priority) and r.top_passing_priority and r.consent
     )
+
+    # Основной высший приоритет: нет + Высший проходной приоритет: да + Есть согласие: да
+    rank_special = count_ahead(records, special_predicate, target.position)
+    # Те же условия, но среди тех, кто НИЖЕ меня.
+    rank_special_below = count_behind(records, special_predicate, target.position)
+
     # Сумма: (осн. высший приоритет: да + согласие: да) + rank_special
     # "осн. высший приоритет" здесь считается как "осн. высший приоритет + согласие",
     # т.е. без требования на "Высший проходной приоритет".
@@ -396,6 +413,7 @@ def compute_snapshot() -> Snapshot:
         rank_priority1=rank_priority1,
         rank_special=rank_special,
         rank_combined=rank_combined,
+        rank_special_below=rank_special_below,
         breakdown=breakdown,
     )
 
@@ -422,6 +440,7 @@ def format_main_message(
     delta_priority1: Optional[int],
     delta_special: Optional[int],
     delta_combined: Optional[int],
+    delta_special_below: Optional[int],
     is_manual: bool,
 ) -> str:
     header = "📍 Текущее положение" if is_manual else "📊 Обновление данных на сайте"
@@ -434,6 +453,9 @@ def format_main_message(
         f"Основной высший приоритет + согласие: {snap.rank_p1_consent - 1}{format_delta(delta_p1c)}",
         f"Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special}{format_delta(delta_special)}",
         f"Сумма (осн. высший приоритет + согласие) + (без осн. высшего приоритета, но с высшим проходным + согласие): {snap.rank_combined}{format_delta(delta_combined)}",
+        "",
+        "👥 Ниже меня человек:",
+        f"! Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special_below}{format_delta(delta_special_below)}",
     ]
     return "\n".join(lines)
 
@@ -545,6 +567,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rank_priority1=snap_data["rank_priority1"],
             rank_special=snap_data["rank_special"],
             rank_combined=snap_data["rank_combined"],
+            rank_special_below=snap_data["rank_special_below"],
             breakdown=snap_data["breakdown"],
         )
 
@@ -562,7 +585,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         # Пересобираем главный экран без пересчёта дельт (это тот же снимок)
         text = format_main_message(
-            snapshot_from_saved(), None, None, None, None, None, is_manual=False
+            snapshot_from_saved(), None, None, None, None, None, None, is_manual=False
         )
         await query.edit_message_text(text, reply_markup=main_keyboard())
     else:
@@ -590,6 +613,7 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     prev_priority1 = meta_get(conn, "last_rank_priority1")
     prev_special = meta_get(conn, "last_rank_special")
     prev_combined = meta_get(conn, "last_rank_combined")
+    prev_special_below = meta_get(conn, "last_rank_special_below")
     delta_p1 = snap.rank_p1 - int(prev_p1) if prev_p1 is not None else None
     delta_p1c = (
         snap.rank_p1_consent - int(prev_p1c) if prev_p1c is not None else None
@@ -605,10 +629,15 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     delta_combined = (
         snap.rank_combined - int(prev_combined) if prev_combined is not None else None
     )
+    delta_special_below = (
+        snap.rank_special_below - int(prev_special_below)
+        if prev_special_below is not None
+        else None
+    )
 
     text = format_main_message(
         snap, delta_p1, delta_p1c, delta_priority1, delta_special, delta_combined,
-        is_manual=True
+        delta_special_below, is_manual=True
     )
     msg = await context.bot.send_message(chat_id, text, reply_markup=main_keyboard())
     save_snapshot(
@@ -625,6 +654,7 @@ async def send_manual_snapshot(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
         snap.consent,
         snap.rank_special,
         snap.rank_combined,
+        snap.rank_special_below,
     )
     # Обратите внимание: "ручная" проверка не перезаписывает last_timestamp /
     # last_rank_*, чтобы не сбивать отсчёт дельты у автоматических обновлений.
@@ -650,6 +680,7 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     prev_priority1 = meta_get(conn, "last_rank_priority1")
     prev_special = meta_get(conn, "last_rank_special")
     prev_combined = meta_get(conn, "last_rank_combined")
+    prev_special_below = meta_get(conn, "last_rank_special_below")
     delta_p1 = snap.rank_p1 - int(prev_p1) if prev_p1 is not None else None
     delta_p1c = (
         snap.rank_p1_consent - int(prev_p1c) if prev_p1c is not None else None
@@ -665,10 +696,15 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     delta_combined = (
         snap.rank_combined - int(prev_combined) if prev_combined is not None else None
     )
+    delta_special_below = (
+        snap.rank_special_below - int(prev_special_below)
+        if prev_special_below is not None
+        else None
+    )
 
     text = format_main_message(
         snap, delta_p1, delta_p1c, delta_priority1, delta_special, delta_combined,
-        is_manual=False
+        delta_special_below, is_manual=False
     )
     msg = await context.bot.send_message(CHAT_ID, text, reply_markup=main_keyboard())
     save_snapshot(
@@ -685,6 +721,7 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
         snap.consent,
         snap.rank_special,
         snap.rank_combined,
+        snap.rank_special_below,
     )
 
     meta_set(conn, "last_timestamp", snap.timestamp)
@@ -693,12 +730,15 @@ async def poll_job(context: ContextTypes.DEFAULT_TYPE):
     meta_set(conn, "last_rank_priority1", snap.rank_priority1)
     meta_set(conn, "last_rank_special", snap.rank_special)
     meta_set(conn, "last_rank_combined", snap.rank_combined)
+    meta_set(conn, "last_rank_special_below", snap.rank_special_below)
     log.info(
         "Отправлено обновление: rank_p1=%s (%s), rank_p1_consent=%s (%s), "
-        "rank_priority1=%s (%s), rank_special=%s (%s), rank_combined=%s (%s)",
+        "rank_priority1=%s (%s), rank_special=%s (%s), rank_combined=%s (%s), "
+        "rank_special_below=%s (%s)",
         snap.rank_p1, delta_p1, snap.rank_p1_consent, delta_p1c,
         snap.rank_priority1, delta_priority1,
         snap.rank_special, delta_special, snap.rank_combined, delta_combined,
+        snap.rank_special_below, delta_special_below,
     )
 
 
