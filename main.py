@@ -455,7 +455,7 @@ def format_main_message(
         f"Сумма (осн. высший приоритет + согласие) + (без осн. высшего приоритета, но с высшим проходным + согласие): {snap.rank_combined}{format_delta(delta_combined)}",
         "",
         "👥 Ниже меня человек:",
-        f"! Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special_below}{format_delta(delta_special_below)}",
+        f"Без основного высшего приоритета, но с высшим проходным + согласие: {snap.rank_special_below}{format_delta(delta_special_below)}",
     ]
     return "\n".join(lines)
 
